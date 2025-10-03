@@ -1,5 +1,62 @@
-const API_KEY = "AIzaSyAAJ06nHdpAc3DdCoHXCrJ8_5izL8jO4bc"; // Replace with your API key
-const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const API_KEY = "AIzaSyC0gVldJ3FTOCst2A6f_Vmu5_-KnO8I8ts"; // Replace with your API key
+let API_URL = null; // Will be discovered dynamically
+
+// Discover a working model + API version for this API key
+let apiInitPromise = null;
+async function ensureApiInitialized() {
+    if (API_URL) return;
+    if (!apiInitPromise) {
+        apiInitPromise = (async () => {
+            const preferOrder = [
+                // Prefer lighter/cheaper first
+                'gemini-1.5-flash-8b-latest',
+                'gemini-1.5-flash-latest',
+                'gemini-1.5-pro-latest'
+            ];
+
+            // Helper to try ListModels on a given api version
+            async function tryVersion(apiVersion) {
+                try {
+                    const res = await fetch(`https://generativelanguage.googleapis.com/${apiVersion}/models?key=${API_KEY}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    const models = Array.isArray(data.models) ? data.models : [];
+
+                    // Build lookup of available models that support generateContent
+                    const supported = new Set(
+                        models
+                            .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+                            .map(m => m.name.replace(/^models\//, ''))
+                    );
+
+                    for (const name of preferOrder) {
+                        if (supported.has(name)) {
+                            return { apiVersion, model: name };
+                        }
+                    }
+
+                    // Fallback: pick any generateContent-capable model if preference not found
+                    const any = models.find(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'));
+                    if (any) {
+                        return { apiVersion, model: any.name.replace(/^models\//, '') };
+                    }
+
+                    return null;
+                } catch (_) {
+                    return null;
+                }
+            }
+
+            // Try v1 first, then v1beta
+            const found = await tryVersion('v1') || await tryVersion('v1beta');
+            if (!found) {
+                throw new Error('No compatible models available for this API key.');
+            }
+            API_URL = `https://generativelanguage.googleapis.com/${found.apiVersion}/models/${found.model}:generateContent?key=${API_KEY}`;
+        })();
+    }
+    return apiInitPromise;
+}
 
 const messageInput = document.getElementById('message-input');
 const sendButton = document.getElementById('send-button');
@@ -88,6 +145,7 @@ function showTypingIndicator() {
 }
 
 async function callGeminiAPI(prompt) {
+    await ensureApiInitialized();
     const identityKeywords = [
         "who made you", "who created you", "who developed you",
         "what are you", "who are you", "what model are you",
@@ -101,8 +159,7 @@ async function callGeminiAPI(prompt) {
     const response = await fetch(API_URL, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': API_KEY
+            'Content-Type': 'application/json'
         },
         body: JSON.stringify({
             contents: [{
